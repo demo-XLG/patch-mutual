@@ -1,0 +1,219 @@
+# Snyk API & Web (Probely) DAST Scan
+# Reference: https://github.com/Probely/cicd-pipeline-scan-examples/blob/main/cicd-examples/github/github-remote-app-blocking-mode.yaml
+#
+# ============================================================================
+# CONFIGURATION - Choose ONE of these options for PROBELY_API_KEY:
+# ============================================================================
+#
+# Option 1: Repository Secret (recommended for single repo)
+#   Go to: Repository → Settings → Secrets and variables → Actions → Secrets
+#   Add: PROBELY_API_KEY = <your-api-key>
+#
+# Option 2: Organization Secret (recommended for multiple repos)
+#   Go to: Organization → Settings → Secrets and variables → Actions → Secrets
+#   Add: PROBELY_API_KEY = <your-api-key>
+#   Note: Automatically available to all repos in the org (or selected repos)
+#
+# Option 3: Environment Secret (recommended for environment-specific keys)
+#   Go to: Repository → Settings → Environments → <env-name> → Secrets
+#   Add: PROBELY_API_KEY = <your-api-key>
+#   Note: Requires adding 'environment: <env-name>' to the job
+#
+# Secret Priority: Environment > Repository > Organization
+#
+# Get your API key at: https://plus.probely.app/ → Settings → API Keys
+# ============================================================================
+#
+# TARGET_ID Configuration:
+#   Set as Repository Variable: Settings → Secrets and variables → Actions → Variables
+#   Name: TARGET_ID
+#   Find your target ID with: probely targets get --api-key <your-key>
+# ============================================================================
+
+name: Snyk API & Web DAST Scan
+
+on:
+  push:
+    branches: [main, master]
+#  pull_request:
+#    branches: [main, master]
+
+# API key from org/repo secret, Target ID from repo variable
+env:
+  PROBELY_API_KEY: ${{ secrets.PROBELY_API_KEY }}
+  TARGET_ID: ${{ vars.TARGET_ID }}
+
+jobs:
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew build
+
+      - name: Upload WAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: altoromutual-war
+          path: build/libs/*.war
+          retention-days: 5
+
+  snyk-api-web-scan:
+    name: Snyk API & Web DAST Scan
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      # Step 1: Install Probely CLI
+      - name: Install Probely CLI
+        run: |
+          pip install probely
+          probely --version
+
+      # Step 2: Verify API Key is configured
+      - name: Verify API Key
+        run: |
+          if [ -z "$PROBELY_API_KEY" ]; then
+            echo "::error::PROBELY_API_KEY secret is not set"
+            exit 1
+          fi
+          echo "API key is configured"
+
+      # Step 3: Start Scan with retry logic
+      - name: Start Scan
+        run: |
+          if [ -z "$TARGET_ID" ]; then
+            echo "::error::TARGET_ID repository variable is not set."
+            exit 1
+          fi
+          
+          echo "Starting scan on target: $TARGET_ID"
+          
+          # Retry loop for starting scan (up to 20 attempts)
+          for i in {1..20}; do
+            echo "-----------------------------------"
+            echo "Attempt $i to start scan..."
+            SCAN_ID=$(probely targets start-scan $TARGET_ID -o IDS_ONLY --api-key ${{ secrets.PROBELY_API_KEY }})
+            echo "Response: ${SCAN_ID}"
+            if [ -z "$SCAN_ID" ] || [ "$SCAN_ID" == "" ]; then
+              echo "Scan didn't start... Retrying..."
+            else
+              echo "Scan started with SCAN ID: ${SCAN_ID}"
+              echo "SCAN_ID=${SCAN_ID}" >> $GITHUB_ENV
+              echo "TARGET_ID=${TARGET_ID}" >> $GITHUB_ENV
+              break
+            fi
+            sleep 5
+          done
+          
+          if [ -z "$SCAN_ID" ]; then
+            echo "::error::Failed to start scan after 20 attempts"
+            exit 1
+          fi
+
+      # Step 4: Wait for scan to complete
+      - name: Wait for scan to complete
+        run: |
+          echo "Waiting for scan ${SCAN_ID} to complete..."
+          echo "### Scan Progress" >> $GITHUB_STEP_SUMMARY
+          
+          while true; do
+            echo "-----------------------------------"
+            SCAN_OUTPUT=$(probely scans get ${SCAN_ID} --api-key ${{ secrets.PROBELY_API_KEY }} | tail -1)
+            echo "${SCAN_OUTPUT}"
+            
+            SCAN_STATUS=$(probely scans get ${SCAN_ID} --api-key ${{ secrets.PROBELY_API_KEY }} -o JSON | jq -r '.status')
+            echo "Current status: ${SCAN_STATUS}"
+            
+            if [ "$SCAN_STATUS" == "started" ] || [ "$SCAN_STATUS" == "queued" ] || [ "$SCAN_STATUS" == "resuming" ] || [ "$SCAN_STATUS" == "pausing" ]; then
+              echo "Scan is running or queued..."
+            else
+              echo "Scan finished with status: ${SCAN_STATUS}"
+              echo "Final status: **${SCAN_STATUS}**" >> $GITHUB_STEP_SUMMARY
+              break
+            fi
+            sleep 30
+          done
+
+      # Step 5: Get scan results summary
+      - name: Get scan results
+        run: |
+          echo "### Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get vulnerability counts
+          SCAN_JSON=$(probely scans get ${SCAN_ID} --api-key ${{ secrets.PROBELY_API_KEY }} -o JSON)
+          
+          CRITICAL_VULNS=$(echo "$SCAN_JSON" | jq -r '.criticals // 0')
+          HIGH_VULNS=$(echo "$SCAN_JSON" | jq -r '.highs // 0')
+          MEDIUM_VULNS=$(echo "$SCAN_JSON" | jq -r '.mediums // 0')
+          LOW_VULNS=$(echo "$SCAN_JSON" | jq -r '.lows // 0')
+          
+          echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Critical | ${CRITICAL_VULNS} |" >> $GITHUB_STEP_SUMMARY
+          echo "| High | ${HIGH_VULNS} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Medium | ${MEDIUM_VULNS} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Low | ${LOW_VULNS} |" >> $GITHUB_STEP_SUMMARY
+          
+          # Save for later steps
+          echo "CRITICAL_VULNS=${CRITICAL_VULNS}" >> $GITHUB_ENV
+          echo "HIGH_VULNS=${HIGH_VULNS}" >> $GITHUB_ENV
+          
+          # Save full results to file
+          echo "$SCAN_JSON" > scan_results.json
+
+      # Step 6: Get findings details
+      - name: Get findings
+        if: always()
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Security Findings (Unfixed)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          probely findings get \
+            --api-key ${{ secrets.PROBELY_API_KEY }} \
+            --f-target ${TARGET_ID} \
+            --f-state NOT_FIXED \
+            -o TABLE >> $GITHUB_STEP_SUMMARY 2>&1 || echo "No findings to display" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      # Step 7: Upload scan results artifact
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-api-web-scan-results
+          path: scan_results.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # Step 8: Check for High/Critical risk vulnerabilities (fail pipeline if found)
+      # - name: Check for High/Critical risk vulnerabilities
+      #   run: |
+      #     echo "Checking for high-risk vulnerabilities..."
+      #     echo "Critical: ${CRITICAL_VULNS}, High: ${HIGH_VULNS}"
+          
+      #     if [[ "${CRITICAL_VULNS}" -gt 0 ]]; then
+      #       echo "::error::Scan found ${CRITICAL_VULNS} CRITICAL risk vulnerabilities"
+      #       exit 1
+      #     fi
+          
+      #     if [[ "${HIGH_VULNS}" -gt 0 ]]; then
+      #       echo "::error::Scan found ${HIGH_VULNS} HIGH risk vulnerabilities"
+      #       exit 1
+      #     fi
+          
+      #     echo "No high or critical risk vulnerabilities found"
