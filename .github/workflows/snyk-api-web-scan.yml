@@ -1,34 +1,5 @@
 # Snyk API & Web (Probely) DAST Scan
 # Reference: https://github.com/Probely/cicd-pipeline-scan-examples/blob/main/cicd-examples/github/github-remote-app-blocking-mode.yaml
-#
-# ============================================================================
-# CONFIGURATION - Choose ONE of these options for PROBELY_API_KEY:
-# ============================================================================
-#
-# Option 1: Repository Secret (recommended for single repo)
-#   Go to: Repository → Settings → Secrets and variables → Actions → Secrets
-#   Add: PROBELY_API_KEY = <your-api-key>
-#
-# Option 2: Organization Secret (recommended for multiple repos)
-#   Go to: Organization → Settings → Secrets and variables → Actions → Secrets
-#   Add: PROBELY_API_KEY = <your-api-key>
-#   Note: Automatically available to all repos in the org (or selected repos)
-#
-# Option 3: Environment Secret (recommended for environment-specific keys)
-#   Go to: Repository → Settings → Environments → <env-name> → Secrets
-#   Add: PROBELY_API_KEY = <your-api-key>
-#   Note: Requires adding 'environment: <env-name>' to the job
-#
-# Secret Priority: Environment > Repository > Organization
-#
-# Get your API key at: https://plus.probely.app/ → Settings → API Keys
-# ============================================================================
-#
-# TARGET_ID Configuration:
-#   Set as Repository Variable: Settings → Secrets and variables → Actions → Variables
-#   Name: TARGET_ID
-#   Find your target ID with: probely targets get --api-key <your-key>
-# ============================================================================
 
 name: Snyk API & Web DAST Scan
 
