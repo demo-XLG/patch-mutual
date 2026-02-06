@@ -92,15 +92,47 @@ jobs:
           fi
           echo "API key is configured"
 
-      # Step 3: Start Scan with retry logic
-      - name: Start Scan
+      # Step 3: Check for existing scan and wait if running
+      - name: Check for existing running scan
         run: |
           if [ -z "$TARGET_ID" ]; then
             echo "::error::TARGET_ID repository variable is not set."
             exit 1
           fi
           
-          echo "Starting scan on target: $TARGET_ID"
+          echo "Checking for existing running scans on target: $TARGET_ID"
+          
+          # Check if there's already a running scan on this target
+          EXISTING_SCAN=$(probely scans get \
+            --api-key ${{ secrets.PROBELY_API_KEY }} \
+            --f-target $TARGET_ID \
+            --f-status STARTED QUEUED RESUMING \
+            -o JSON 2>/dev/null | jq -r '.[0].id // empty' || true)
+          
+          if [ -n "$EXISTING_SCAN" ]; then
+            echo "Found existing running scan: $EXISTING_SCAN"
+            echo "Waiting for existing scan to complete before starting a new one..."
+            
+            while true; do
+              SCAN_STATUS=$(probely scans get $EXISTING_SCAN --api-key ${{ secrets.PROBELY_API_KEY }} -o JSON | jq -r '.status')
+              echo "Existing scan status: $SCAN_STATUS"
+              
+              if [ "$SCAN_STATUS" == "started" ] || [ "$SCAN_STATUS" == "queued" ] || [ "$SCAN_STATUS" == "resuming" ] || [ "$SCAN_STATUS" == "pausing" ]; then
+                echo "Existing scan still running, waiting 30s..."
+                sleep 30
+              else
+                echo "Existing scan completed with status: $SCAN_STATUS"
+                break
+              fi
+            done
+          else
+            echo "No existing running scan found"
+          fi
+
+      # Step 4: Start new scan
+      - name: Start Scan
+        run: |
+          echo "Starting new scan on target: $TARGET_ID"
           
           # Retry loop for starting scan (up to 20 attempts)
           for i in {1..20}; do
@@ -109,11 +141,10 @@ jobs:
             SCAN_ID=$(probely targets start-scan $TARGET_ID -o IDS_ONLY --api-key ${{ secrets.PROBELY_API_KEY }})
             echo "Response: ${SCAN_ID}"
             if [ -z "$SCAN_ID" ] || [ "$SCAN_ID" == "" ]; then
-              echo "Scan didn't start... Retrying..."
+              echo "Scan didn't start... Retrying in 5s..."
             else
               echo "Scan started with SCAN ID: ${SCAN_ID}"
               echo "SCAN_ID=${SCAN_ID}" >> $GITHUB_ENV
-              echo "TARGET_ID=${TARGET_ID}" >> $GITHUB_ENV
               break
             fi
             sleep 5
@@ -124,7 +155,7 @@ jobs:
             exit 1
           fi
 
-      # Step 4: Wait for scan to complete
+      # Step 5: Wait for new scan to complete
       - name: Wait for scan to complete
         run: |
           echo "Waiting for scan ${SCAN_ID} to complete..."
@@ -148,7 +179,7 @@ jobs:
             sleep 30
           done
 
-      # Step 5: Get scan results summary
+      # Step 6: Get scan results summary
       - name: Get scan results
         run: |
           echo "### Scan Results" >> $GITHUB_STEP_SUMMARY
@@ -176,7 +207,7 @@ jobs:
           # Save full results to file
           echo "$SCAN_JSON" > scan_results.json
 
-      # Step 6: Get findings details
+      # Step 7: Get findings details
       - name: Get findings
         if: always()
         run: |
@@ -190,7 +221,7 @@ jobs:
             -o TABLE >> $GITHUB_STEP_SUMMARY 2>&1 || echo "No findings to display" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      # Step 7: Upload scan results artifact
+      # Step 8: Upload scan results artifact
       - name: Upload scan results
         if: always()
         uses: actions/upload-artifact@v4
@@ -200,7 +231,7 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
-      # Step 8: Check for High/Critical risk vulnerabilities (fail pipeline if found)
+      # Step 9: Check for High/Critical risk vulnerabilities (fail pipeline if found)
       # - name: Check for High/Critical risk vulnerabilities
       #   run: |
       #     echo "Checking for high-risk vulnerabilities..."
