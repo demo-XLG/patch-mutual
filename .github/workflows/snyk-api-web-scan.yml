@@ -1,5 +1,6 @@
 # Snyk API & Web (Probely) DAST Scan
 # Reference: https://github.com/Probely/cicd-pipeline-scan-examples/blob/main/cicd-examples/github/github-remote-app-blocking-mode.yaml
+# lightning scan type test
 
 name: Snyk API & Web DAST Scan
 
