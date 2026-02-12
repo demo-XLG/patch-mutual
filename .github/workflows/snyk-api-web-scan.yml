@@ -1,6 +1,6 @@
 # Snyk API & Web (Probely) DAST Scan
 # Reference: https://github.com/Probely/cicd-pipeline-scan-examples/blob/main/cicd-examples/github/github-remote-app-blocking-mode.yaml
-# custom scan type test: normal-fast mode
+# custom scan type test: normal- fast mode
 
 name: Snyk API & Web DAST Scan
 
